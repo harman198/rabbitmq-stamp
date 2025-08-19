@@ -74,7 +74,7 @@ assert_args_equivalence(X, Args) ->
 route(X = #exchange{}, Msg) ->
     route(X, Msg, #{}).
 
-route(#exchange{name = _XName}, Msg, _Opts) ->
+route(#exchange{name = Name} = _X, Msg, _Opts) ->
     %% Extract message headers once
     Headers = mc:routing_headers(Msg, [x_headers]),
 
@@ -83,10 +83,29 @@ route(#exchange{name = _XName}, Msg, _Opts) ->
             %% No target: route nowhere (publisher confirms will get unroutable if mandatory)
             [];
         TargetName when is_binary(TargetName) ->
-            rabbit_stamp_worker:next(TargetName, Msg),
-            [];
+            %% Now, route the message to the target exchange.
+            route_to_exchange(Name, TargetName, Msg);
         Other ->
             %% Bad header type: do not route
             rabbit_log:warning("x-stamp: invalid forward-exchange header: ~p", [Other]),
+            []
+    end.
+
+%% --- Helpers ---
+
+%% Look up the target exchange in the same vhost and delegate routing to it.
+route_to_exchange(VHost, TargetName, Msg) ->
+    % TargetRes =
+    %     #resource{virtual_host = VHost,
+    %               kind = exchange,
+    %               name = TargetName},
+    ExchangeName = rabbit_misc:r(VHost, exchange, TargetName),
+    case rabbit_exchange:lookup(ExchangeName) of
+        {ok, TargetX} ->
+            %% Delegate routing to the target exchange implementation
+            rabbit_exchange:route(TargetX, Msg);
+        {error, not_found} ->
+            rabbit_log:warning("x-stamp: target exchange ~p not found in vhost ~p",
+                               [TargetName, VHost]),
             []
     end.
