@@ -83,7 +83,7 @@ route(#exchange{name = _XName}, Msg, _Opts) ->
             %% No target: route nowhere (publisher confirms will get unroutable if mandatory)
             [];
         TargetName when is_binary(TargetName) ->
-            rabbit_stamp_worker:fire(TargetName, Msg),
+            rabbit_stamp_worker:next(TargetName, Msg),
             [];
         Other ->
             %% Bad header type: do not route

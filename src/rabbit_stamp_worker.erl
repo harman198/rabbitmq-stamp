@@ -5,13 +5,11 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
--export([fire/2]).
+-export([next/2]).
 
 -include_lib("../../amqp_client/include/amqp_client.hrl").
 
 -record(state, {channel, exchange}).
-
--define(RKFormat, "~4.10.0B.~2.10.0B.~2.10.0B.~1.10.0B.~2.10.0B.~2.10.0B.~2.10.0B").
 
 start_link() ->
     gen_server:start_link({global, ?MODULE}, ?MODULE, [], []).
@@ -26,36 +24,32 @@ init([]) ->
 handle_call(_Msg, _From, State) ->
     {reply, unknown_command, State}.
 
-handle_cast({fire, ExchangeName, Message}, #state{channel = undefined} = State) ->
-    rabbit_log:info("Handle before Connection Open"),
+handle_cast({next, ExchangeName, Message}, State) ->
     case rabbit:is_running() of
         true ->
-            State1 = open_connection(ExchangeName, State),
-            rabbit_log:info("Connection Open"),
-            handle_cast({fire, ExchangeName, Message}, State1);
+            State1 = open_connection(ExchangeName),
+            handle_message({next, ExchangeName, Message, State1#state.channel});
         false ->
             timer:sleep(1000),
-            handle_cast({fire, ExchangeName, Message}, State)
+            handle_cast({next, ExchangeName, Message}, State)
     end;
-handle_cast({fire, ExchangeName, Message},
-            #state{channel = Channel, exchange = Exchange} = State) ->
-    rabbit_log:info("Handle after Connection Open"),
-    rabbit_log:info("Handle Exchange ~p ExchangeName ~p Message  ~p",
-                    [Exchange, ExchangeName, Message]),
-    {RoutingKey, Payload, Properties} = extract_parts(Message),
-    BasicPublish = #'basic.publish'{exchange = Exchange, routing_key = RoutingKey},
-    rabbit_log:info("Handle RoutingKey ~p Payload ~p Properties  ~p",
-                    [RoutingKey, Payload, Properties]),
-    Content = #amqp_msg{props = Properties, payload = Payload},
-    amqp_channel:call(Channel, BasicPublish, Content),
-    {noreply, State};
 handle_cast(_, State) ->
     {noreply, State}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_, _) ->
+handle_message({next, ExchangeName, Message, Channel}) ->
+    {_RoutingKey, Payload, Properties} = extract_parts(Message),
+    BasicPublish = #'basic.publish'{exchange = ExchangeName, routing_key = _RoutingKey},
+    Content = #amqp_msg{props = Properties, payload = Payload},
+    amqp_channel:call(Channel, BasicPublish, Content),
+    {noreply, #state{channel = Channel, exchange = ExchangeName}}.
+
+terminate(_, #state{channel = undefined}) ->
+    ok;
+terminate(_, #state{channel = Channel}) ->
+    amqp_channel:call(Channel, #'channel.close'{}),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -63,22 +57,19 @@ code_change(_OldVsn, State, _Extra) ->
 
 %---------------------------
 
-open_connection(Exchange, State) ->
+open_connection(Exchange) ->
     {ok, Connection} = amqp_connection:start(#amqp_params_direct{}),
     {ok, Channel} = amqp_connection:open_channel(Connection),
     %{ok, Exchange} = application:get_env(rabbitmq_stamp, exchange),
-    rabbit_log:info("Exchange ~p", [Exchange]),
     amqp_channel:call(Channel, #'exchange.declare'{exchange = Exchange, passive = true}),
-    State#state{channel = Channel, exchange = Exchange}.
+    #state{channel = Channel, exchange = Exchange}.
 
-fire(<<ExchangeName/binary>>, Message) ->
-    rabbit_log:info("Fire Binary"),
-    gen_server:cast({global, ?MODULE}, {fire, ExchangeName, Message});
-fire(ExchangeName, Message) when is_atom(ExchangeName) ->
-    rabbit_log:info("Fire Non Binary"),
+next(<<ExchangeName/binary>>, Message) ->
+    gen_server:cast({global, ?MODULE}, {next, ExchangeName, Message});
+next(ExchangeName, Message) when is_atom(ExchangeName) ->
     ExchangeName0 =
         list_to_binary(atom_to_list(ExchangeName)), % list_to_atom(binary_to_list(ExchangeName)),
-    gen_server:cast({global, ?MODULE}, {fire, ExchangeName0, Message}).
+    gen_server:cast({global, ?MODULE}, {next, ExchangeName0, Message}).
 
 %%--------------------------------------------------------------------
 %% @spec extract_parts(Msg :: tuple()) ->
