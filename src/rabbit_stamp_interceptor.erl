@@ -109,6 +109,6 @@ set_content_timestamp_header(#content{properties =
                                           #'P_basic'{headers = Headers0} = Props0} =
                                  Content,
                              Stamp) ->
-    Headers1 = add_header(Headers0, {?STAMP, longstr, integer_to_binary(Stamp)}),
+    Headers1 = add_header(Headers0, {?STAMP, long, Stamp}),
     Props1 = Props0#'P_basic'{headers = Headers1},
     Content#content{properties = Props1, properties_bin = none}.
